@@ -51,4 +51,6 @@ go test -v ./...
 
 ## License
 
-[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+This project is licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+
+See the full text in the `LICENSE` file or at https://www.gnu.org/licenses/agpl-3.0.html
