@@ -18,8 +18,9 @@ type HTTPClient interface {
 // ValidationResult 包含验证成功后的详细信息。
 type ValidationResult struct {
 	Challenge string `json:"challenge"`
+	Gt        string `json:"gt"`
+	GtUserId  string `json:"gt_user_id"`
 	Validate  string `json:"validate"`
-	GTUserID  string `json:"gt_user_id,omitempty"`
 }
 
 // RemoteValidator 结构体具体实现了验证码解析逻辑。
@@ -171,14 +172,9 @@ func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, erro
 			return nil, fmt.Errorf("check response contains neither queue_num nor info: %w", ErrCaptchaFailed)
 		}
 
-		// info 可能是字符串，也可能是包含验证信息的对象
+		// info 可能是字符串（"in running", "fail", "url invalid"），也可能是包含验证信息的 JSON 对象
 		var infoStr string
-		var infoMap map[string]interface{}
-
-		isString := json.Unmarshal(infoRaw, &infoStr) == nil
-		isMap := json.Unmarshal(infoRaw, &infoMap) == nil
-
-		if isString {
+		if err := json.Unmarshal(infoRaw, &infoStr); err == nil {
 			if infoStr == "fail" || infoStr == "url invalid" {
 				return nil, fmt.Errorf("%w: server returned '%s'", ErrCaptchaFailed, infoStr)
 			}
@@ -201,27 +197,13 @@ func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, erro
 					Validate: infoStr,
 				}, nil
 			}
+			return nil, fmt.Errorf("%w: unexpected info string: %s", ErrCaptchaFailed, infoStr)
 		}
 
-		if isMap {
-			// 如果 info 是一个 JSON 对象，检查是否包含 "validate" 字段
-			if val, ok := infoMap["validate"]; ok {
-				var result ValidationResult
-				if err := json.Unmarshal(infoRaw, &result); err == nil && result.Validate != "" {
-					return &result, nil
-				}
-				// 备用：手动进行字段映射
-				if vStr, ok := val.(string); ok {
-					res := &ValidationResult{Validate: vStr}
-					if ch, ok := infoMap["challenge"].(string); ok {
-						res.Challenge = ch
-					}
-					if uid, ok := infoMap["gt_user_id"].(string); ok {
-						res.GTUserID = uid
-					}
-					return res, nil
-				}
-			}
+		// 如果 info 不是字符串，那么尝试解析为验证成功的 JSON 对象
+		var result ValidationResult
+		if err := json.Unmarshal(infoRaw, &result); err == nil && result.Validate != "" {
+			return &result, nil
 		}
 
 		// 既不是预期的状态，也没有 validate 信息

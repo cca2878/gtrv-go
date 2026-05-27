@@ -72,6 +72,7 @@ func TestRemoteValidator_Success_Object(t *testing.T) {
 						"challenge":  "test-challenge",
 						"validate":   "test-validate",
 						"gt_user_id": "test-userid",
+						"gt":         "test-gt",
 					},
 				})
 			}
@@ -91,8 +92,11 @@ func TestRemoteValidator_Success_Object(t *testing.T) {
 	if res.Validate != "test-validate" {
 		t.Errorf("expected validate test-validate, got %s", res.Validate)
 	}
-	if res.GTUserID != "test-userid" {
-		t.Errorf("expected gt_user_id test-userid, got %s", res.GTUserID)
+	if res.GtUserId != "test-userid" {
+		t.Errorf("expected gt_user_id test-userid, got %s", res.GtUserId)
+	}
+	if res.Gt != "test-gt" {
+		t.Errorf("expected gt test-gt, got %s", res.Gt)
 	}
 
 	if callCount != 2 {
@@ -110,7 +114,7 @@ func TestRemoteValidator_Success_String(t *testing.T) {
 				})
 			}
 			if strings.Contains(req.URL.Path, "/check/test-uuid-456") {
-				infoJSON := `{"challenge":"str-challenge","validate":"str-validate","gt_user_id":"str-userid"}`
+				infoJSON := `{"challenge":"str-challenge","validate":"str-validate","gt_user_id":"str-userid","gt":"str-gt"}`
 				return createJSONResponse(http.StatusOK, map[string]string{
 					"info": infoJSON,
 				})
@@ -125,7 +129,7 @@ func TestRemoteValidator_Success_String(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	if res.Challenge != "str-challenge" || res.Validate != "str-validate" || res.GTUserID != "str-userid" {
+	if res.Challenge != "str-challenge" || res.Validate != "str-validate" || res.GtUserId != "str-userid" || res.Gt != "str-gt" {
 		t.Errorf("unexpected validation result: %+v", res)
 	}
 }
