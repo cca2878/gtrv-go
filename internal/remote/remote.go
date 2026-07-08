@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -25,21 +24,66 @@ type ValidationResult struct {
 
 // RemoteValidator 结构体具体实现了验证码解析逻辑。
 type RemoteValidator struct {
-	client HTTPClient
-	sleep  func(ctx context.Context, d time.Duration) error
+	client       HTTPClient
+	sleep        func(ctx context.Context, d time.Duration) error
+	baseURL      string
+	userAgent    string
+	maxRounds    int           // 轮询上限
+	runningDelay time.Duration // "in running" 状态的等待间隔
 }
 
 const (
-	baseURL   = "https://pcrd.tencentbot.top"
-	userAgent = "autopcr/1.0.0"
+	defaultBaseURL      = "https://pcrd.tencentbot.top"
+	defaultUserAgent    = "autopcr/1.0.0"
+	defaultMaxRounds    = 5
+	defaultRunningDelay = 8 * time.Second
 )
 
-// NewRemoteValidator 创建一个远程验证器实例。
-func NewRemoteValidator(client HTTPClient) *RemoteValidator {
+// Option 定制远程验证器（求解服务地址、UA、轮询参数等）。
+type Option func(*RemoteValidator)
+
+// WithBaseURL 覆盖求解服务的基础地址（默认 pcrd.tencentbot.top）。
+func WithBaseURL(u string) Option {
+	return func(v *RemoteValidator) {
+		if u != "" {
+			v.baseURL = u
+		}
+	}
+}
+
+// WithUserAgent 覆盖请求 User-Agent。
+func WithUserAgent(ua string) Option {
+	return func(v *RemoteValidator) {
+		if ua != "" {
+			v.userAgent = ua
+		}
+	}
+}
+
+// WithMaxRounds 覆盖轮询上限轮数（默认 5）。
+func WithMaxRounds(n int) Option {
+	return func(v *RemoteValidator) {
+		if n > 0 {
+			v.maxRounds = n
+		}
+	}
+}
+
+// WithRunningPollInterval 覆盖 "in running" 状态的等待间隔（默认 8s）。
+func WithRunningPollInterval(d time.Duration) Option {
+	return func(v *RemoteValidator) {
+		if d > 0 {
+			v.runningDelay = d
+		}
+	}
+}
+
+// NewRemoteValidator 创建一个远程验证器实例。client 为 nil 时默认 http.DefaultClient。
+func NewRemoteValidator(client HTTPClient, opts ...Option) *RemoteValidator {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &RemoteValidator{
+	v := &RemoteValidator{
 		client: client,
 		sleep: func(ctx context.Context, d time.Duration) error {
 			select {
@@ -49,7 +93,15 @@ func NewRemoteValidator(client HTTPClient) *RemoteValidator {
 				return nil
 			}
 		},
+		baseURL:      defaultBaseURL,
+		userAgent:    defaultUserAgent,
+		maxRounds:    defaultMaxRounds,
+		runningDelay: defaultRunningDelay,
 	}
+	for _, o := range opts {
+		o(v)
+	}
+	return v
 }
 
 // SetSleepFunc 允许在测试中自定义 sleep 函数，使轮询过程免于实际等待时间。
@@ -62,13 +114,13 @@ func (v *RemoteValidator) SetSleepFunc(fn func(ctx context.Context, d time.Durat
 // Validate 执行验证码解析，基于 Python 的 remoteValidator 逻辑轮询服务端。
 func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, error) {
 	// 1. 获取 geetest_renew 分配 uuid
-	renewURL := baseURL + "/geetest_renew"
+	renewURL := v.baseURL + "/geetest_renew"
 	req, err := http.NewRequestWithContext(ctx, "GET", renewURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create renew request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", v.userAgent)
 
 	resp, err := v.client.Do(req)
 	if err != nil {
@@ -99,7 +151,7 @@ func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, erro
 
 	// 2. 轮询 check 接口
 	ccnt := 0
-	up := 5
+	up := v.maxRounds
 
 	for ccnt <= up {
 		// 检查 context 是否已被取消
@@ -108,13 +160,13 @@ func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, erro
 		}
 
 		ccnt++
-		checkURL := fmt.Sprintf("%s/check/%s", baseURL, uuid)
+		checkURL := fmt.Sprintf("%s/check/%s", v.baseURL, uuid)
 		checkReq, err := http.NewRequestWithContext(ctx, "GET", checkURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create check request: %w", err)
 		}
 		checkReq.Header.Set("Content-Type", "application/json")
-		checkReq.Header.Set("User-Agent", userAgent)
+		checkReq.Header.Set("User-Agent", v.userAgent)
 
 		checkResp, err := v.client.Do(checkReq)
 		if err != nil {
@@ -179,7 +231,7 @@ func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, erro
 				return nil, fmt.Errorf("%w: server returned '%s'", ErrCaptchaFailed, infoStr)
 			}
 			if infoStr == "in running" {
-				if err := v.sleep(ctx, 8*time.Second); err != nil {
+				if err := v.sleep(ctx, v.runningDelay); err != nil {
 					return nil, err
 				}
 				continue
@@ -191,12 +243,7 @@ func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, erro
 				return &result, nil
 			}
 
-			// 如果不是 JSON，但包含了 validate 关键字，提取或包裹返回
-			if strings.Contains(infoStr, "validate") {
-				return &ValidationResult{
-					Validate: infoStr,
-				}, nil
-			}
+			// 其余字符串都是非预期状态，直接判失败（不再把整串裸塞进 Validate 返回畸形结果）
 			return nil, fmt.Errorf("%w: unexpected info string: %s", ErrCaptchaFailed, infoStr)
 		}
 
