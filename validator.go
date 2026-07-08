@@ -108,10 +108,12 @@ func NewRemoteValidator(client HTTPClient, opts ...Option) Validator {
 }
 
 func defaultSleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(d):
+	case <-timer.C:
 		return nil
 	}
 }
@@ -201,17 +203,13 @@ func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, erro
 				return nil, ErrQueueTooLong
 			}
 
-			// tim = min(int(nu), 3) * 10
+			// tim = min(int(nu), 3) * 10 —— 上限 30s（nu>=35 已在上面判失败）
 			tim := min(nu, 3)
 			tim *= 10
 
 			// 延迟等待，期间注意响应 ctx 取消
 			if err := v.sleep(ctx, time.Duration(tim)*time.Second); err != nil {
 				return nil, err
-			}
-
-			if tim >= 40 {
-				ccnt += 2
 			}
 			continue
 		}
