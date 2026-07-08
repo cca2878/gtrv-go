@@ -398,3 +398,50 @@ func TestWithBaseURLTrimsTrailingSlash(t *testing.T) {
 		t.Errorf("尾斜杠未去除，renewURL=%q", renewURL)
 	}
 }
+
+// 12. 具体失败哨兵从属于 ErrCaptchaFailed（层级，review）。
+func TestSpecificErrorsAreCaptchaFailed(t *testing.T) {
+	if !errors.Is(ErrQueueTooLong, ErrCaptchaFailed) || !errors.Is(ErrMaxRetriesExceeded, ErrCaptchaFailed) {
+		t.Error("ErrQueueTooLong/ErrMaxRetriesExceeded 应 errors.Is ErrCaptchaFailed")
+	}
+}
+
+// 13. 传输层失败（状态码/网络）归入 ErrCaptchaFailed，且底层错误仍可 errors.Is（review）。
+func TestTransportErrorsWrapCaptchaFailed(t *testing.T) {
+	// renew 返回非 2xx 状态
+	statusClient := &mockClient{doFunc: func(req *http.Request) (*http.Response, error) {
+		return createStringResponse(http.StatusInternalServerError, "boom")
+	}}
+	if _, err := newTestValidator(statusClient).Validate(context.Background()); !errors.Is(err, ErrCaptchaFailed) {
+		t.Errorf("状态码失败应归入 ErrCaptchaFailed, got %v", err)
+	}
+
+	// renew 网络错误：底层 err 应仍可被 errors.Is 命中
+	netErr := errors.New("dial tcp: connection refused")
+	netClient := &mockClient{doFunc: func(req *http.Request) (*http.Response, error) {
+		return nil, netErr
+	}}
+	_, err := newTestValidator(netClient).Validate(context.Background())
+	if !errors.Is(err, ErrCaptchaFailed) {
+		t.Errorf("网络失败应归入 ErrCaptchaFailed, got %v", err)
+	}
+	if !errors.Is(err, netErr) {
+		t.Errorf("底层网络错误应保留可 errors.Is, got %v", err)
+	}
+}
+
+// 14. 上下文取消不应被包裹成 ErrCaptchaFailed。
+func TestContextCancelNotCaptchaFailed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := &mockClient{doFunc: func(req *http.Request) (*http.Response, error) {
+		return createJSONResponse(http.StatusOK, map[string]string{"uuid": "u"})
+	}}
+	_, err := newTestValidator(client).Validate(ctx)
+	if errors.Is(err, ErrCaptchaFailed) {
+		t.Errorf("ctx 取消不应归入 ErrCaptchaFailed, got %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("应为 context.Canceled, got %v", err)
+	}
+}

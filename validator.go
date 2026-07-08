@@ -3,6 +3,7 @@ package gtrv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -118,8 +119,23 @@ func defaultSleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// Validate 执行验证码解析，基于 Python 的 remoteValidator 逻辑轮询服务端。
+// Validate 执行验证码解析。任何非上下文取消/超时的失败都归入 ErrCaptchaFailed 家族，
+// 使调用方可用 errors.Is(err, ErrCaptchaFailed) 统一识别求解失败；底层错误仍可被 errors.Is 命中。
 func (v *RemoteValidator) Validate(ctx context.Context) (*ValidationResult, error) {
+	res, err := v.solve(ctx)
+	if err == nil {
+		return res, nil
+	}
+	// 上下文取消/超时按原样返回；已属 ErrCaptchaFailed 家族的不重复包裹；
+	// 其余（传输层网络/状态码/解析等）归入通用 ErrCaptchaFailed。
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, ErrCaptchaFailed) {
+		err = fmt.Errorf("%w: %w", ErrCaptchaFailed, err)
+	}
+	return nil, err
+}
+
+// solve 是实际的轮询实现，基于 Python 的 remoteValidator 逻辑。
+func (v *RemoteValidator) solve(ctx context.Context) (*ValidationResult, error) {
 	// 1. 获取 geetest_renew 分配 uuid
 	renewURL := v.baseURL + "/geetest_renew"
 	req, err := http.NewRequestWithContext(ctx, "GET", renewURL, nil)
