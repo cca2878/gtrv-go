@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/cca2878/gtrv-go/internal/remote"
 )
 
 type mockClient struct {
@@ -22,7 +20,7 @@ func (m *mockClient) Do(req *http.Request) (*http.Response, error) {
 	return m.doFunc(req)
 }
 
-func createJSONResponse(statusCode int, data interface{}) (*http.Response, error) {
+func createJSONResponse(statusCode int, data any) (*http.Response, error) {
 	bodyBytes, _ := json.Marshal(data)
 	return &http.Response{
 		StatusCode: statusCode,
@@ -42,15 +40,16 @@ func createStringResponse(statusCode int, text string) (*http.Response, error) {
 // 辅助函数：创建一个免等待睡眠的 Validator
 func newTestValidator(client HTTPClient) Validator {
 	v := NewRemoteValidator(client)
-	if rv, ok := v.(*remote.RemoteValidator); ok {
-		rv.SetSleepFunc(func(ctx context.Context, d time.Duration) error {
+	if rv, ok := v.(*RemoteValidator); ok {
+		// 同包测试直接替换 sleep，使轮询免于实际等待。
+		rv.sleep = func(ctx context.Context, d time.Duration) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 				return nil
 			}
-		})
+		}
 	}
 	return v
 }
@@ -67,7 +66,7 @@ func TestRemoteValidator_Success_Object(t *testing.T) {
 				})
 			}
 			if strings.Contains(req.URL.Path, "/check/test-uuid-123") {
-				return createJSONResponse(http.StatusOK, map[string]interface{}{
+				return createJSONResponse(http.StatusOK, map[string]any{
 					"info": map[string]string{
 						"challenge":  "test-challenge",
 						"validate":   "test-validate",
@@ -153,7 +152,7 @@ func TestRemoteValidator_Success_WithQueue(t *testing.T) {
 					})
 				}
 				// 第二次 check：返回成功
-				return createJSONResponse(http.StatusOK, map[string]interface{}{
+				return createJSONResponse(http.StatusOK, map[string]any{
 					"info": map[string]string{
 						"challenge": "q-challenge",
 						"validate":  "q-validate",
@@ -198,7 +197,7 @@ func TestRemoteValidator_Success_WithInRunning(t *testing.T) {
 					})
 				}
 				// 第二次 check: 成功
-				return createJSONResponse(http.StatusOK, map[string]interface{}{
+				return createJSONResponse(http.StatusOK, map[string]any{
 					"info": map[string]string{
 						"challenge": "r-challenge",
 						"validate":  "r-validate",
@@ -312,8 +311,7 @@ func TestRemoteValidator_Failure_Timeout(t *testing.T) {
 		t.Errorf("expected ErrMaxRetriesExceeded error, got: %v", err)
 	}
 
-	// 轮询上限为 5 次（ccnt: 0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 (退出循环)）
-	// 所以一共应该有 6 次 check 请求被发起（ccnt 每次循环最开始进行自增 1，且判断 ccnt <= up(5) 时进行循环）
+	// 默认轮询上限 maxRounds=6，循环条件 ccnt < 6 → 恰好发起 6 次 check 请求。
 	if callCount != 6 {
 		t.Errorf("expected 6 check calls, got %d", callCount)
 	}
@@ -340,5 +338,63 @@ func TestRemoteValidator_Failure_ContextCanceled(t *testing.T) {
 
 	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "context canceled") {
 		t.Errorf("expected context canceled error, got: %v", err)
+	}
+}
+
+// 9. nil option 应被安全忽略，不 panic（review #6）。
+func TestNilOptionIgnored(t *testing.T) {
+	var nilOpt Option
+	v := NewRemoteValidator(&mockClient{}, nilOpt, WithMaxRounds(3))
+	if v == nil {
+		t.Fatal("构造应成功")
+	}
+}
+
+// 10. WithMaxRounds(n) 应恰好轮询 n 次（诚实语义，review #1）。
+func TestWithMaxRoundsHonest(t *testing.T) {
+	checks := 0
+	client := &mockClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Path, "/geetest_renew") {
+				return createJSONResponse(http.StatusOK, map[string]string{"uuid": "u"})
+			}
+			checks++
+			return createJSONResponse(http.StatusOK, map[string]string{"info": "in running"})
+		},
+	}
+	v := NewRemoteValidator(client, WithMaxRounds(2))
+	v.(*RemoteValidator).sleep = func(context.Context, time.Duration) error { return nil }
+
+	_, err := v.Validate(context.Background())
+	if !errors.Is(err, ErrMaxRetriesExceeded) {
+		t.Fatalf("应超轮询上限: %v", err)
+	}
+	if checks != 2 {
+		t.Errorf("WithMaxRounds(2) 应恰好 2 次 check, got %d", checks)
+	}
+}
+
+// 11. WithBaseURL 去除尾斜杠，避免 // 畸形路径（review #2）。
+func TestWithBaseURLTrimsTrailingSlash(t *testing.T) {
+	var renewURL string
+	client := &mockClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Path, "geetest_renew") {
+				renewURL = req.URL.String()
+				return createJSONResponse(http.StatusOK, map[string]string{"uuid": "u"})
+			}
+			return createJSONResponse(http.StatusOK, map[string]any{
+				"info": map[string]string{"validate": "v"},
+			})
+		},
+	}
+	v := NewRemoteValidator(client, WithBaseURL("https://host.example/"))
+	v.(*RemoteValidator).sleep = func(context.Context, time.Duration) error { return nil }
+
+	if _, err := v.Validate(context.Background()); err != nil {
+		t.Fatalf("Validate 失败: %v", err)
+	}
+	if renewURL != "https://host.example/geetest_renew" {
+		t.Errorf("尾斜杠未去除，renewURL=%q", renewURL)
 	}
 }
