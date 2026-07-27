@@ -2,13 +2,9 @@
 
 > 极验（GeeTest）Gt 验证码的**远程求解**库——零依赖、可测，把 challenge 委托给远程服务解出 validate。
 
-![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](./LICENSE)
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](./LICENSE)
 
-[autopcr](https://github.com/cc004/autopcr) 中 `remoteValidator` 机制的干净 Go 移植。**不做本地推理**：把待解
-验证码委托给远程求解服务、排队轮询直到出结果，返回 `(challenge, validate)`。与姊妹库
-[gtlv-go](https://github.com/cca2878/gtlv-go)（**本地** wasm 推理求解）互为两条路线；
-[bsdkv3-go](https://github.com/cca2878/bsdkv3-go) 经 `WithClientValidator` 消费本库暴露的 `Validator`。
+[autopcr](https://github.com/cc004/autopcr) 中 `remoteValidator` 机制的干净 Go 移植。**不做本地推理**：把待解验证码委托给远程求解服务、排队轮询直到出结果，返回 `(challenge, validate)`。与姊妹库[gtlv-go](https://github.com/cca2878/gtlv-go)（**本地** wasm 推理求解）互为两条路线；[bsdkv3-go](https://github.com/cca2878/bsdkv3-go) 经 `WithClientValidator` 消费本库暴露的 `Validator`。
 
 ## 用法
 
@@ -64,8 +60,7 @@ bsdkv3.NewClient(ctx, bsdkv3.AppkeyPcr,
 go test -v ./...
 ```
 
-CI（`.github/workflows/ci.yml`，job `Go (fmt · vet · test)`）：gofmt / vet / `go mod verify` / build / test。
-分支模型 dev/main（开发提 dev、PR 合 main），提交英文 `<type>: <describe>`。
+CI（`.github/workflows/ci.yml`，job `Go (fmt · vet · test)`）：gofmt / vet / `go mod verify` / build / test。分支模型 dev/main（开发提 dev、PR 合 main），提交英文 `<type>: <describe>`。
 
 ## 许可证
 
