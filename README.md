@@ -1,6 +1,6 @@
 # gtrv-go
 
-> 极验（GeeTest）Gt 验证码的**远程求解**库——零依赖、可测，把 challenge 委托给远程服务解出 validate。
+> gt 验证码的**远程求解**库——零依赖、可测，把 challenge 委托给远程服务解出 validate。
 
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](./LICENSE)
 
